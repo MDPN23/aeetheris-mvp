@@ -1,0 +1,59 @@
+serve:
+  proxy:
+    port: 4455
+    timeout:
+      read: 5s
+      write: 10s
+      idle: 120s
+  api:
+    port: 4456
+
+access_rules:
+  matching_strategy: regexp
+  repositories:
+    - file:///etc/config/oathkeeper/rules.json
+
+errors:
+  handlers:
+    json:
+      enabled: true
+      config:
+        verbose: true
+
+authenticators:
+  jwt:
+    enabled: true
+    config:
+      jwks_urls:
+        - "http://keycloak:8080/realms/aetheris/protocol/openid-connect/certs"
+      token_from:
+        header: Authorization
+      trusted_issuers:
+        - "http://keycloak:8080/realms/aetheris"
+        - "http://localhost:8080/realms/aetheris"
+
+  noop:
+    enabled: true
+
+authorizers:
+  allow:
+    enabled: true
+  remote_json:
+    enabled: true
+    config:
+      remote: "http://opa:8181/v1/data/aetheris/authz/allow"
+      payload: "{}"
+
+mutators:
+  header:
+    enabled: true
+    config:
+      headers:
+        X-Aetheris-Subject: "{{ .Subject }}"
+        X-Aetheris-Roles: "{{ .Extra.roles | toJson }}"
+  noop:
+    enabled: true
+
+log:
+  level: debug
+  format: json

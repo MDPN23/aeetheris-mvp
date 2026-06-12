@@ -1,0 +1,49 @@
+[
+  {
+    "id": "backend-all-methods",
+    "description": "OIDC + OPA policy enforcement for Backend Service",
+    "match": {
+      "url": "http://<(localhost|oathkeeper):4455>/api/backend<.*>",
+      "methods": ["GET", "POST", "PUT", "DELETE", "PATCH"]
+    },
+    "authenticators": [
+      {
+        "handler": "jwt"
+      }
+    ],
+    "authorizer": {
+      "handler": "remote_json",
+      "config": {
+        "payload": "{\"input\":{\"token\":\"{{ if index .MatchContext.Header \\\"Authorization\\\" }}{{ index (index .MatchContext.Header \\\"Authorization\\\") 0 }}{{ else }}{{ end }}\",\"token_claims\":{{ .Extra | toJson }},\"service\":\"backend\",\"method\":\"{{ .MatchContext.Method }}\"}}"
+      }
+    },
+    "mutators": [
+      {
+        "handler": "header"
+      }
+    ],
+    "errors": [
+      { "handler": "json" }
+    ],
+    "upstream": {
+      "url": "http://backend:80",
+      "strip_path": "/api/backend",
+      "preserve_host": false
+    }
+  },
+  {
+    "id": "health-public",
+    "description": "Public health check endpoint - no auth required",
+    "match": {
+      "url": "http://<(localhost|oathkeeper):4455>/health<.*>",
+      "methods": ["GET"]
+    },
+    "authenticators": [{ "handler": "noop" }],
+    "authorizer": { "handler": "allow" },
+    "mutators": [{ "handler": "noop" }],
+    "upstream": {
+      "url": "http://backend:80",
+      "strip_path": "/health"
+    }
+  }
+]

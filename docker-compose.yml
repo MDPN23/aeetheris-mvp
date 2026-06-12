@@ -1,0 +1,116 @@
+version: "3.9"
+
+networks:
+  aetheris-mvp-net:
+    driver: bridge
+
+volumes:
+  keycloak-data:
+  postgres-data:
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: mvp-postgres
+    environment:
+      POSTGRES_DB: aetheris
+      POSTGRES_USER: aetheris_admin
+      POSTGRES_PASSWORD: aetheris_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - aetheris-mvp-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aetheris_admin -d aetheris"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0.4
+    container_name: mvp-keycloak
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/aetheris
+      KC_DB_USERNAME: aetheris_admin
+      KC_DB_PASSWORD: aetheris_password
+      KC_DB_SCHEMA: public
+    command:
+      - start-dev
+      - --import-realm
+    volumes:
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+      - keycloak-data:/opt/keycloak/data
+    ports:
+      - "8080:8080"
+    networks:
+      - aetheris-mvp-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && echo -e 'GET /realms/aetheris/.well-known/openid-configuration HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep '200 OK' <&3"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  opa:
+    image: openpolicyagent/opa:0.65.0-debug
+    container_name: mvp-opa
+    command:
+      - run
+      - --server
+      - --addr=0.0.0.0:8181
+      - --log-format=json
+      - --log-level=info
+      - /policies/authz.rego
+    volumes:
+      - ./opa:/policies:ro
+    ports:
+      - "8181:8181"
+    networks:
+      - aetheris-mvp-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8181/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  oathkeeper:
+    image: oryd/oathkeeper:v0.40.7
+    container_name: mvp-oathkeeper
+    command: serve --config /etc/config/oathkeeper/config.yml
+    volumes:
+      - ./oathkeeper/config.yml:/etc/config/oathkeeper/config.yml:ro
+      - ./oathkeeper/rules.json:/etc/config/oathkeeper/rules.json:ro
+    ports:
+      - "4455:4455"   # proxy
+      - "4456:4456"   # api
+    networks:
+      - aetheris-mvp-net
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      opa:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4456/health/alive || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    image: traefik/whoami
+    container_name: mvp-backend
+    ports:
+      - "5000:80"
+    networks:
+      - aetheris-mvp-net
